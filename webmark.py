@@ -7,7 +7,14 @@ import webbrowser
 from collections import namedtuple, OrderedDict
 
 
-class Bookmark(namedtuple('BookmarkBase', ['code', 'url', 'description'])):
+BookmarkBase = namedtuple('BookmarkBase', [
+    'code',
+    'url',
+    'description'
+])
+
+
+class Bookmark(BookmarkBase):
 
     def __str__(self):
         return '[{0.code}] {0.url} - {0.description}'.format(self)
@@ -41,14 +48,14 @@ class ApplicationError(Exception):
 
 class BookmarksApp:
 
-    def __init__(self, settings):
-        self.settings = settings
-        self.storage = CSVObjectStorage(self.settings.storage_path)
+    def __init__(self):
+        self.args = Args()
+        self.storage = CSVObjectStorage(self.args.storage_path)
         self.bookmarks = OrderedDict(
             (x.code, x) for x in map(Bookmark._make, self.storage.load()))
 
     def run(self):
-        command = getattr(self, self.settings.command)
+        command = getattr(self, self.args.subcommand)
         command()
 
     def list(self):
@@ -59,42 +66,35 @@ class BookmarksApp:
             print(bookmark)
 
     def add(self):
-        bookmark = Bookmark(*self.settings.command_args)
-
-        if not self.settings.force and bookmark.code in self.bookmarks:
-            bookmark = self.bookmarks[bookmark.code]
+        code = self.args.code
+        if not self.args.force and code in self.bookmarks:
             msg = ("There is a bookmark with that code:\n"
                    "{0}\n\n"
-                   "To override it add option -f").format(bookmark)
-            raise ApplicationError(msg)
+                   "To override it add option -f")
+            raise ApplicationError(msg.format(self.bookmarks[code]))
 
-        self.bookmarks[bookmark.code] = bookmark
+        self.bookmarks[code] = Bookmark(
+            code, self.args.url, self.args.description)
         self.storage.save(self.bookmarks.values())
 
     def rm(self):
-        code = self.settings.command_args[0]
-        bookmark = self.bookmarks.pop(code, None)
+        bookmark = self.bookmarks.pop(self.args.code, None)
 
         if not bookmark:
-            raise ApplicationError("There is no bookmark with code {}".format(code))
+            raise ApplicationError("There is no bookmark with that code")
 
         self.storage.save(self.bookmarks.values())
 
-    def open(self):
-        code = self.settings.command_args[0]
-        bookmark = self.bookmarks.get(code)
+    def go(self):
+        bookmark = self.bookmarks.get(self.args.code)
 
         if not bookmark:
-            raise ApplicationError("There is no bookmark with code {}".format(code))
+            raise ApplicationError("There is no bookmark that code")
 
         webbrowser.open_new_tab(bookmark.url)
 
 
-class ArgumentsError(Exception):
-    pass
-
-
-class Settings:
+class Args:
 
     def __init__(self):
         self.init_from_args()
@@ -104,21 +104,25 @@ class Settings:
 
     def init_from_args(self):
         parser = argparse.ArgumentParser()
-        parser.add_argument('command', choices=['list', 'add', 'rm', 'open'])
-        parser.add_argument('command_args', nargs='*')
-        parser.add_argument('-f', action='store_true', dest='force')
+        subparsers = parser.add_subparsers(title='subcommands',
+                                           dest='subcommand')
         parser.add_argument('--storage-path', default='~/.webmark')
-        parser.parse_args(namespace=self)
 
-        if self.command == 'add' and len(self.command_args) != 3:
-            raise ArgumentsError("To add bookmark use following command:\n\t"
-                                 "webmark add {code} {url} {description}")
-        if self.command == 'open' and len(self.command_args) != 1:
-            raise ArgumentsError("To open bookmark use following command:\n\t"
-                                 "webmark open {code}")
-        if self.command == 'rm' and len(self.command_args) != 1:
-            raise ArgumentsError("To remove bookmark use following command:\n\t"
-                                 "webmark rm {code}")
+        subparsers.add_parser('list')
+
+        subparser_add = subparsers.add_parser('add')
+        subparser_add.add_argument('-f', action='store_true', dest='force')
+        subparser_add.add_argument('code')
+        subparser_add.add_argument('url')
+        subparser_add.add_argument('description')
+
+        subparser_rm = subparsers.add_parser('rm')
+        subparser_rm.add_argument('code')
+
+        subparser_go = subparsers.add_parser('go')
+        subparser_go.add_argument('code')
+
+        parser.parse_args(namespace=self)
 
     def init_from_env(self):
         self.storage_path = os.environ.get('WEBMARK_STORAGE_PATH',
@@ -127,8 +131,7 @@ class Settings:
 
 if __name__ == '__main__':
     try:
-        settings = Settings()
-        error_code = BookmarksApp(settings).run()
-    except (ApplicationError, ArgumentsError) as e:
+        error_code = BookmarksApp().run()
+    except ApplicationError as e:
         print(e)
         sys.exit(1)
